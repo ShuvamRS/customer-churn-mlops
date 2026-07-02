@@ -1,108 +1,235 @@
 """
 train.py — trains the churn prediction model and saves it to model.joblib.
 
-This script generates a synthetic customer churn dataset, trains a simple
-scikit-learn pipeline, evaluates model accuracy, and saves the trained model
-artifact for use by the prediction API.
+This script uses a locally downloaded Telco Customer Churn dataset, trains a
+scikit-learn pipeline, evaluates the model with classification metrics, and
+saves the trained model artifact for the prediction API.
 
 Run:  python train.py
 """
-import numpy as np
-import pandas as pd
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+
+from pathlib import Path
+
 import joblib
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-RANDOM_STATE = 42
+
+DATA_PATH = Path("data/Telco-Customer-Churn.csv")
 MODEL_PATH = "model.joblib"
-# Minimum acceptable model accuracy before saving the model artifact.
-ACCURACY_THRESHOLD = 0.78
+RANDOM_STATE = 42
 
-FEATURES = [
-    "tenure_months",
-    "monthly_charges",
-    "total_charges",
-    "contract_type",       # 0 = month-to-month, 1 = one year, 2 = two year
-    "has_tech_support",    # 0 / 1
-    "has_online_security", # 0 / 1
-    "is_electronic_check", # 0 / 1
+ROC_AUC_THRESHOLD = 0.80
+RECALL_THRESHOLD = 0.60
+THRESHOLD_CANDIDATES = [x / 100 for x in range(20, 81)]
+
+NUMERIC_FEATURES = [
+    "SeniorCitizen",
+    "tenure",
+    "MonthlyCharges",
+    "TotalCharges",
 ]
 
+CATEGORICAL_FEATURES = [
+    "gender",
+    "Partner",
+    "Dependents",
+    "PhoneService",
+    "MultipleLines",
+    "InternetService",
+    "OnlineSecurity",
+    "OnlineBackup",
+    "DeviceProtection",
+    "TechSupport",
+    "StreamingTV",
+    "StreamingMovies",
+    "Contract",
+    "PaperlessBilling",
+    "PaymentMethod",
+]
 
-def make_dataset(n=5000, seed=RANDOM_STATE):
-    """Synthetic churn data. Churn rises with: short tenure, high monthly
-    charges, month-to-month contracts, no support, electronic-check payment."""
-    rng = np.random.default_rng(seed)
+FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
+TARGET = "Churn"
 
-    tenure = rng.integers(1, 72, n)
-    monthly = rng.uniform(20, 120, n).round(2)
-    total = (monthly * tenure * rng.uniform(0.9, 1.05, n)).round(2)
-    contract = rng.choice([0, 1, 2], n, p=[0.55, 0.25, 0.20])
-    tech = rng.integers(0, 2, n)
-    security = rng.integers(0, 2, n)
-    echeck = rng.integers(0, 2, n)
 
-    # Build a churn "risk score", then sample the label from it.
-    score = (
-        1.8
-        - 0.060 * tenure
-        + 0.022 * monthly
-        - 1.2 * contract
-        - 0.7 * tech
-        - 0.6 * security
-        + 0.8 * echeck
-        + rng.normal(0, 0.35, n)
-    )
-    prob = 1 / (1 + np.exp(-score))
-    # Label is the thresholded boundary (with the noise already baked into
-    # `score`), so a well-fit model can clear the gate while the data stays noisy.
-    churn = (prob > 0.5).astype(int)
-    # Flip ~8% of labels so the model isn't perfectly separable and predicted
-    # probabilities look realistic (e.g. 0.83) instead of saturating at 1.0.
-    flip = rng.uniform(0, 1, n) < 0.08
-    churn[flip] = 1 - churn[flip]
+def load_data():
+    if not DATA_PATH.exists():
+        raise FileNotFoundError(f"Dataset not found: {DATA_PATH}")
 
-    return pd.DataFrame({
-        "tenure_months": tenure,
-        "monthly_charges": monthly,
-        "total_charges": total,
-        "contract_type": contract,
-        "has_tech_support": tech,
-        "has_online_security": security,
-        "is_electronic_check": echeck,
-        "churn": churn,
+    df = pd.read_csv(DATA_PATH)
+
+    # TotalCharges is stored as text in the raw CSV and has a few blank values.
+    df["TotalCharges"] = pd.to_numeric(df["TotalCharges"], errors="coerce")
+
+    return df
+
+
+def build_model():
+    numeric_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("scaler", StandardScaler()),
+    ])
+
+    categorical_pipeline = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("encoder", OneHotEncoder(handle_unknown="ignore")),
+    ])
+
+    preprocessor = ColumnTransformer([
+        ("num", numeric_pipeline, NUMERIC_FEATURES),
+        ("cat", categorical_pipeline, CATEGORICAL_FEATURES),
+    ])
+
+    # class_weight helps because churn datasets usually have fewer churners.
+    model = Pipeline([
+        ("preprocessor", preprocessor),
+        ("model", LogisticRegression(
+            max_iter=1000,
+            class_weight="balanced",
+            random_state=RANDOM_STATE,
+        )),
+    ])
+
+    return model
+
+
+def evaluate_model(y_true, y_pred, y_prob):
+    return {
+        "accuracy": round(accuracy_score(y_true, y_pred), 4),
+        "precision": round(precision_score(y_true, y_pred, zero_division=0), 4),
+        "recall": round(recall_score(y_true, y_pred, zero_division=0), 4),
+        "f1": round(f1_score(y_true, y_pred, zero_division=0), 4),
+        "roc_auc": round(roc_auc_score(y_true, y_prob), 4),
+    }
+
+
+def find_best_threshold(y_true, y_prob):
+    best_threshold = 0.50
+    best_f1 = 0
+
+    for threshold in THRESHOLD_CANDIDATES:
+        y_pred = (y_prob >= threshold).astype(int)
+        score = f1_score(y_true, y_pred, zero_division=0)
+
+        if score > best_f1:
+            best_f1 = score
+            best_threshold = threshold
+
+    return best_threshold
+
+
+def print_feature_weights(model, top_n=8):
+    preprocessor = model.named_steps["preprocessor"]
+    classifier = model.named_steps["model"]
+
+    feature_names = preprocessor.get_feature_names_out()
+    weights = classifier.coef_[0]
+
+    importance = pd.DataFrame({
+        "feature": feature_names,
+        "weight": weights,
     })
+
+    print("\nTop churn risk factors:")
+    print(
+        importance.sort_values("weight", ascending=False)
+        .head(top_n)
+        .to_string(index=False)
+    )
+
+    print("\nTop retention factors:")
+    print(
+        importance.sort_values("weight")
+        .head(top_n)
+        .to_string(index=False)
+    )
 
 
 def main():
-    df = make_dataset()
-    X, y = df[FEATURES], df["churn"]
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=RANDOM_STATE, stratify=y
+    df = load_data()
+
+    X = df[FEATURES]
+    y = (df[TARGET] == "Yes").astype(int)
+
+
+    X_train_full, X_test, y_train_full, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.2,
+        random_state=RANDOM_STATE,
+        stratify=y,
     )
 
-    model = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", LogisticRegression(max_iter=1000)),
-    ])
+    X_train, X_val, y_train, y_val = train_test_split(
+        X_train_full,
+        y_train_full,
+        test_size=0.25,
+        random_state=RANDOM_STATE,
+        stratify=y_train_full,
+    )
+
+    model = build_model()
     model.fit(X_train, y_train)
 
-    acc = accuracy_score(y_test, model.predict(X_test))
-    print(f"Churn rate in data : {y.mean():.1%}")
-    print(f"Test accuracy      : {acc:.3f}")
-    print(f"Accuracy threshold : {ACCURACY_THRESHOLD}")
+    val_prob = model.predict_proba(X_val)[:, 1]
+    best_threshold = find_best_threshold(y_val, val_prob)
 
-    if acc < ACCURACY_THRESHOLD:
-        raise SystemExit(
-            f"FAIL: accuracy {acc:.3f} < threshold {ACCURACY_THRESHOLD}. "
-            "Refusing to save a sub-par model."
-        )
+    val_pred = (val_prob >= best_threshold).astype(int)
+    val_metrics = evaluate_model(y_val, val_pred, val_prob)
 
-    joblib.dump({"model": model, "features": FEATURES, "accuracy": acc}, MODEL_PATH)
-    print(f"PASS: saved {MODEL_PATH}")
+    test_prob = model.predict_proba(X_test)[:, 1]
+    test_pred = (test_prob >= best_threshold).astype(int)
+    metrics = evaluate_model(y_test, test_pred, test_prob)
+
+    print(f"Rows used      : {len(df)}")
+    print(f"Train rows     : {len(X_train)}")
+    print(f"Validation rows: {len(X_val)}")
+    print(f"Test rows      : {len(X_test)}")
+    print(f"Churn rate     : {y.mean():.2%}")
+    print(f"Best threshold : {best_threshold}")
+
+    print("\nValidation metrics:")
+    print(f"Accuracy       : {val_metrics['accuracy']}")
+    print(f"Precision      : {val_metrics['precision']}")
+    print(f"Recall         : {val_metrics['recall']}")
+    print(f"F1-score       : {val_metrics['f1']}")
+    print(f"ROC-AUC        : {val_metrics['roc_auc']}")
+
+    print("\nTest metrics:")
+    print(f"Accuracy       : {metrics['accuracy']}")
+    print(f"Precision      : {metrics['precision']}")
+    print(f"Recall         : {metrics['recall']}")
+    print(f"F1-score       : {metrics['f1']}")
+    print(f"ROC-AUC        : {metrics['roc_auc']}")
+
+    print_feature_weights(model)
+
+    if metrics["roc_auc"] < ROC_AUC_THRESHOLD:
+        raise SystemExit(f"ROC-AUC is below threshold: {metrics['roc_auc']}")
+
+    if metrics["recall"] < RECALL_THRESHOLD:
+        raise SystemExit(f"Recall is below threshold: {metrics['recall']}")
+
+    joblib.dump(
+        {
+            "model": model,
+            "features": FEATURES,
+            "numeric_features": NUMERIC_FEATURES,
+            "categorical_features": CATEGORICAL_FEATURES,
+            "threshold": best_threshold,
+            "metrics": metrics,
+            "accuracy": metrics["accuracy"],
+        },
+        MODEL_PATH,
+    )
+
+    print(f"\nSaved model to {MODEL_PATH}")
 
 
 if __name__ == "__main__":

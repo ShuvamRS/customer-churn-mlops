@@ -1,20 +1,5 @@
-# Python
-__pycache__/
-*.py[cod]
-.pytest_cache/
-
-# Virtual environments
-.venv/
-venv/
-
-# Model artifacts generated locally
 model.joblib
-*.joblib
-
-# Local/manual API test files
+__pycache__/
+.pytest_cache/
 test/
-
-# OS/editor files
-.DS_Store
-.vscode/
-.idea/
+.venv/

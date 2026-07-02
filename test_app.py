@@ -14,33 +14,71 @@ from app import app
 client = TestClient(app)
 
 HIGH_RISK = {
-    "tenure_months": 2, "monthly_charges": 95.0, "total_charges": 190.0,
-    "contract_type": 0, "has_tech_support": 0, "has_online_security": 0,
-    "is_electronic_check": 1,
+    "gender": "Female",
+    "SeniorCitizen": 0,
+    "Partner": "Yes",
+    "Dependents": "No",
+    "tenure": 2,
+    "PhoneService": "Yes",
+    "MultipleLines": "No",
+    "InternetService": "Fiber optic",
+    "OnlineSecurity": "No",
+    "OnlineBackup": "Yes",
+    "DeviceProtection": "No",
+    "TechSupport": "No",
+    "StreamingTV": "Yes",
+    "StreamingMovies": "Yes",
+    "Contract": "Month-to-month",
+    "PaperlessBilling": "Yes",
+    "PaymentMethod": "Electronic check",
+    "MonthlyCharges": 95.0,
+    "TotalCharges": 190.0,
 }
 LOW_RISK = {
-    "tenure_months": 60, "monthly_charges": 40.0, "total_charges": 2400.0,
-    "contract_type": 2, "has_tech_support": 1, "has_online_security": 1,
-    "is_electronic_check": 0,
+    "gender": "Male",
+    "SeniorCitizen": 0,
+    "Partner": "Yes",
+    "Dependents": "Yes",
+    "tenure": 60,
+    "PhoneService": "Yes",
+    "MultipleLines": "Yes",
+    "InternetService": "DSL",
+    "OnlineSecurity": "Yes",
+    "OnlineBackup": "Yes",
+    "DeviceProtection": "Yes",
+    "TechSupport": "Yes",
+    "StreamingTV": "No",
+    "StreamingMovies": "No",
+    "Contract": "Two year",
+    "PaperlessBilling": "No",
+    "PaymentMethod": "Credit card (automatic)",
+    "MonthlyCharges": 40.0,
+    "TotalCharges": 2400.0,
 }
 
 
 def test_health_ok():
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json()["status"] == "ok"
+    body = r.json()
+    assert body["status"] == "ok"
+    assert "model_metrics" in body
 
 
 def test_predict_response_shape():
     r = client.post("/predict", json=HIGH_RISK)
     assert r.status_code == 200
     body = r.json()
-    assert "churn" in body and "churn_probability" in body
+    assert "churn" in body
+    assert "churn_probability" in body
+    assert "threshold" in body
+    assert isinstance(body["churn"], bool)
     assert 0.0 <= body["churn_probability"] <= 1.0
+    assert 0.0 <= body["threshold"] <= 1.0
 
 
 def test_validation_rejects_bad_input():
-    bad = dict(HIGH_RISK, contract_type=9)  # out of allowed range 0-2
+    bad = dict(HIGH_RISK, tenure=-1)
     assert client.post("/predict", json=bad).status_code == 422
 
 

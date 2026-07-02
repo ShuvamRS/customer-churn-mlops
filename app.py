@@ -22,31 +22,50 @@ app = FastAPI(title="Churn Prediction API", version="1.0.0")
 _bundle = joblib.load(MODEL_PATH)
 _model = _bundle["model"]
 _features = _bundle["features"]
-_trained_accuracy = _bundle["accuracy"]
+_threshold = _bundle["threshold"]
+_metrics = _bundle["metrics"]
 
 
 class Customer(BaseModel):
-    tenure_months: int = Field(..., ge=0, examples=[5])
-    monthly_charges: float = Field(..., ge=0, examples=[89.5])
-    total_charges: float = Field(..., ge=0, examples=[450.0])
-    contract_type: int = Field(..., ge=0, le=2, examples=[0],
-                               description="0=month-to-month, 1=one year, 2=two year")
-    has_tech_support: int = Field(..., ge=0, le=1, examples=[0])
-    has_online_security: int = Field(..., ge=0, le=1, examples=[0])
-    is_electronic_check: int = Field(..., ge=0, le=1, examples=[1])
+    gender: str = Field(..., examples=["Female"])
+    SeniorCitizen: int = Field(..., ge=0, le=1, examples=[0])
+    Partner: str = Field(..., examples=["Yes"])
+    Dependents: str = Field(..., examples=["No"])
+    tenure: int = Field(..., ge=0, examples=[2])
+    PhoneService: str = Field(..., examples=["Yes"])
+    MultipleLines: str = Field(..., examples=["No"])
+    InternetService: str = Field(..., examples=["Fiber optic"])
+    OnlineSecurity: str = Field(..., examples=["No"])
+    OnlineBackup: str = Field(..., examples=["Yes"])
+    DeviceProtection: str = Field(..., examples=["No"])
+    TechSupport: str = Field(..., examples=["No"])
+    StreamingTV: str = Field(..., examples=["Yes"])
+    StreamingMovies: str = Field(..., examples=["Yes"])
+    Contract: str = Field(..., examples=["Month-to-month"])
+    PaperlessBilling: str = Field(..., examples=["Yes"])
+    PaymentMethod: str = Field(..., examples=["Electronic check"])
+    MonthlyCharges: float = Field(..., ge=0, examples=[95.0])
+    TotalCharges: float = Field(..., ge=0, examples=[190.0])
 
 
 @app.get("/health")
 def health():
     """Liveness/readiness probe target for Kubernetes."""
-    return {"status": "ok", "trained_accuracy": round(_trained_accuracy, 3)}
+    return {
+        "status": "ok",
+        "model_metrics": _metrics,
+    }
 
 
 @app.post("/predict")
 def predict(customer: Customer):
-    row = pd.DataFrame([{f: getattr(customer, f) for f in _features}])
+    customer_data = customer.model_dump()
+    row = pd.DataFrame([{feature: customer_data[feature] for feature in _features}])
+
     proba = float(_model.predict_proba(row)[0][1])
+
     return {
-        "churn": bool(proba >= 0.5),
+        "churn": bool(proba >= _threshold),
         "churn_probability": round(proba, 4),
+        "threshold": _threshold,
     }
