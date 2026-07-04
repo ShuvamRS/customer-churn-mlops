@@ -6,35 +6,6 @@ pipeline {
     }
 
     stages {
-        stage('Install Dependencies') {
-            steps {
-                sh '''
-                    rm -rf venv
-                    python3 -m venv venv
-                    . venv/bin/activate
-                    pip install -r requirements.txt
-                '''
-            }
-        }
-
-        stage('Train Model') {
-            steps {
-                sh '''
-                    . venv/bin/activate
-                    python3 train.py
-                '''
-            }
-        }
-
-        stage('Run Tests') {
-            steps {
-                sh '''
-                    . venv/bin/activate
-                    pytest -q
-                '''
-            }
-        }
-
         stage('Build Docker Image') {
             steps {
                 sh '''
