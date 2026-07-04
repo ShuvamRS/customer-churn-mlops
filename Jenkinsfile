@@ -22,7 +22,7 @@ pipeline {
 
                     docker run -d -p 8000:8000 --name churn-api-test customer-churn-mlops:latest
 
-                    # Give FastAPI a few seconds to start
+                    # Wait for a few seconds for FastAPI to start
                     sleep 5
 
                     # Fail Jenkins if /health does not return a successful response
