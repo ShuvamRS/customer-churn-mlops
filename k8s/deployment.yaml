@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-churn-deployment
+  labels:
+    app: customer-churn
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: customer-churn
+  template:
+    metadata:
+      labels:
+        app: customer-churn
+    spec:
+      containers:
+        - name: customer-churn-api
+          image: shuvamrs/customer-churn-mlops:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
