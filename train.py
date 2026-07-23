@@ -1,15 +1,17 @@
 """
-train.py — trains the churn prediction model and saves it to model.joblib.
+train.py — trains the churn prediction model and uploads it to S3.
 
 This script uses a locally downloaded Telco Customer Churn dataset, trains a
-scikit-learn pipeline, evaluates the model with classification metrics, and
-saves the trained model artifact for the prediction API.
+scikit-learn pipeline, evaluates the model with classification metrics, saves
+the trained model artifact, and uploads it to S3.
 
 Run:  python train.py
 """
 
+import os
 from pathlib import Path
 
+import boto3
 import joblib
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -56,6 +58,15 @@ CATEGORICAL_FEATURES = [
 
 FEATURES = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 TARGET = "Churn"
+
+
+def get_required_env(name):
+    value = os.getenv(name)
+
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+
+    return value
 
 
 def load_data():
@@ -151,12 +162,22 @@ def print_feature_weights(model, top_n=8):
     )
 
 
+def upload_model_to_s3():
+    s3_bucket_name = get_required_env("S3_BUCKET_NAME")
+    model_s3_key = get_required_env("MODEL_S3_KEY")
+    aws_region = get_required_env("AWS_REGION")
+
+    s3_client = boto3.client("s3", region_name=aws_region)
+    s3_client.upload_file(MODEL_PATH, s3_bucket_name, model_s3_key)
+
+    print(f"Uploaded model to s3://{s3_bucket_name}/{model_s3_key}")
+
+
 def main():
     df = load_data()
 
     X = df[FEATURES]
     y = (df[TARGET] == "Yes").astype(int)
-
 
     X_train_full, X_test, y_train_full, y_test = train_test_split(
         X,
@@ -230,6 +251,7 @@ def main():
     )
 
     print(f"\nSaved model to {MODEL_PATH}")
+    upload_model_to_s3()
 
 
 if __name__ == "__main__":
