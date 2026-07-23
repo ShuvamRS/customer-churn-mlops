@@ -9,3 +9,9 @@ variable "model_bucket_name" {
   type        = string
   default     = "customer-churn-mlops-models-shuvamrs"
 }
+
+variable "ecr_repository_name" {
+  description = "Name of the ECR repository used to store the Docker image"
+  type        = string
+  default     = "customer-churn-mlops"
+}
