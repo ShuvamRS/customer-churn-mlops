@@ -5,59 +5,140 @@ pipeline {
         githubPush()
     }
 
+    environment {
+        AWS_REGION = 'us-west-1'
+        ECR_REPO_NAME = 'customer-churn-mlops'
+        EKS_CLUSTER_NAME = 'customer-churn-eks'
+        S3_BUCKET_NAME = 'customer-churn-mlops-models-shuvamrs'
+        MODEL_S3_KEY = 'model.joblib'
+        TAG = "${env.BUILD_NUMBER}"
+    }
+
     stages {
-        stage('Build Docker Image') {
+        stage('Setup') {
             steps {
+                script {
+                    env.IMAGE = sh(
+                        script: "aws ecr describe-repositories --repository-names ${ECR_REPO_NAME} --region ${AWS_REGION} --query 'repositories[0].repositoryUri' --output text",
+                        returnStdout: true
+                    ).trim()
+                }
+
                 sh '''
-                    docker build -t customer-churn-mlops:latest .
+                    aws eks update-kubeconfig --region $AWS_REGION --name $EKS_CLUSTER_NAME
                 '''
             }
         }
 
-        stage('Create and test Container') {
+        stage('Train Model and Upload to S3') {
             steps {
                 sh '''
-                    # Remove old test container if it exists
+                    docker run --rm --network host \
+                      -v "$PWD":/workspace \
+                      -w /workspace \
+                      -e S3_BUCKET_NAME="$S3_BUCKET_NAME" \
+                      -e MODEL_S3_KEY="$MODEL_S3_KEY" \
+                      -e AWS_REGION="$AWS_REGION" \
+                      python:3.12-slim \
+                      bash -c "pip install --no-cache-dir -r requirements.txt && python train.py"
+
+                    aws s3 ls s3://$S3_BUCKET_NAME/$MODEL_S3_KEY
+                '''
+            }
+        }
+
+        stage('Run Tests') {
+            steps {
+                sh '''
+                    docker run --rm --network host \
+                      -v "$PWD":/workspace \
+                      -w /workspace \
+                      -e S3_BUCKET_NAME="$S3_BUCKET_NAME" \
+                      -e MODEL_S3_KEY="$MODEL_S3_KEY" \
+                      -e AWS_REGION="$AWS_REGION" \
+                      python:3.12-slim \
+                      bash -c "pip install --no-cache-dir -r requirements.txt && pytest -q"
+                '''
+            }
+        }
+
+        stage('Build Image') {
+            steps {
+                sh '''
+                    docker build -t $IMAGE:$TAG -t $IMAGE:latest .
+                '''
+            }
+        }
+
+        stage('Test Container') {
+            steps {
+                sh '''
                     docker rm -f churn-api-test || true
 
-                    docker run -d -p 8000:8000 --name churn-api-test customer-churn-mlops:latest
+                    docker run -d \
+                      --name churn-api-test \
+                      --network host \
+                      -e S3_BUCKET_NAME="$S3_BUCKET_NAME" \
+                      -e MODEL_S3_KEY="$MODEL_S3_KEY" \
+                      -e AWS_REGION="$AWS_REGION" \
+                      $IMAGE:$TAG
 
-                    # Wait for a few seconds for FastAPI to start
-                    sleep 5
+                    sleep 10
 
-                    # Fail Jenkins if /health does not return a successful response
+                    docker logs churn-api-test
                     curl -f http://127.0.0.1:8000/health
 
-                    docker stop churn-api-test
-                    docker rm churn-api-test
+                    docker rm -f churn-api-test
                 '''
             }
         }
 
-        stage('Push Docker Image') {
+        stage('Push Image') {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-credentials',
-                    usernameVariable: 'DOCKERHUB_USERNAME',
-                    passwordVariable: 'DOCKERHUB_PASSWORD'
-                )]) {
-                    sh '''
-                        printf "%s" "$DOCKERHUB_PASSWORD" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
-                        docker tag customer-churn-mlops:latest shuvamrs/customer-churn-mlops:latest
-                        docker push shuvamrs/customer-churn-mlops:latest
-                    '''
-                }
+                sh '''
+                    ECR_REGISTRY=$(echo $IMAGE | cut -d/ -f1)
+
+                    aws ecr get-login-password --region $AWS_REGION | \
+                      docker login --username AWS --password-stdin $ECR_REGISTRY
+
+                    docker push $IMAGE:$TAG
+                    docker push $IMAGE:latest
+                '''
+            }
+        }
+
+        stage('Deploy to EKS') {
+            steps {
+                sh '''
+                    kubectl apply -f k8s/configmap.yaml
+                    kubectl apply -f k8s/deployment.yaml
+                    kubectl apply -f k8s/service.yaml
+
+                    kubectl set image deployment/customer-churn-deployment \
+                      customer-churn-api=$IMAGE:$TAG
+
+                    kubectl rollout status deployment/customer-churn-deployment --timeout=300s
+
+                    kubectl get pods
+                    kubectl get service customer-churn-service
+                '''
             }
         }
     }
 
     post {
+        always {
+            sh '''
+                docker rm -f churn-api-test || true
+            '''
+        }
+
         success {
-            echo '✅ Jenkins pipeline completed successfully. Docker image was built, tested, and pushed.'
+            echo "Shipped $IMAGE:$TAG to EKS."
         }
 
         failure {
-            echo '❌ Jenkins pipeline failed.'
+            echo 'Pipeline failed — model training, tests, image build, push, or deploy did not pass.'
         }
     }
 }
