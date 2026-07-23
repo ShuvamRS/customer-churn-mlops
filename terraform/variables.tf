@@ -69,3 +69,9 @@ variable "node_group_max_size" {
   type        = number
   default     = 3
 }
+
+variable "jenkins_ec2_role_arn" {
+  description = "IAM role ARN used by Jenkins EC2 to access the EKS cluster"
+  type        = string
+  default     = "arn:aws:iam::672965015125:role/customer-churn-jenkins-ec2-role"
+}
