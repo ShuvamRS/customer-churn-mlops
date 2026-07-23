@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: customer-churn-api
-          image: shuvamrs/customer-churn-mlops:latest
+          image: 672965015125.dkr.ecr.us-west-1.amazonaws.com/customer-churn-mlops:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
