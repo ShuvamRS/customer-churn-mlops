@@ -67,10 +67,6 @@ GET  /health
 POST /predict
 ```
 
-<p align="center">
-  <img src="screenshots/07_eks_api_health_browser.png" alt="Health endpoint returning model metrics" width="850">
-</p>
-
 Example `/health` response:
 
 ```json
